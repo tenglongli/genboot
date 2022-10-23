@@ -1,27 +1,30 @@
 cath=read.csv('nels.csv')
 cath$faminc8 <- cath$faminc8-1
 cath <- within(cath,{
-             prop=fitted.values(glm(catholic~faminc8*math8+I(faminc8*faminc8),family=binomial))
+             prop=fitted.values(glm(catholic~faminc8*math8,family=binomial))
              eotm=ifelse(catholic==1,1/prop,1/(1-prop))
 })
 cath <- within(cath,{
-             teotm=eotm
+             teotm=ifelse(eotm<=20,eotm,20)
              p=ifelse(catholic==1,eotm/sum(subset(cath,catholic==1,eotm)),eotm/sum(subset(cath,catholic==0,eotm)))
              hajek=ifelse(catholic==1,1/(nrow(cath[cath$catholic==1,])*p),1/(nrow(cath[cath$catholic==0,])*p))
 })
-cath$teotm[which(cath$teotm>20)]=20
+cath <- within(cath,{
+seotm <- ifelse(catholic==1,(sum(catholic)/length(catholic))/prop,(1-sum(catholic)/length(catholic))/(1-prop))
+})
 
 ## Make appendix figure 1 
 par(mfrow=c(2,2))
 hist(cath[which(cath$catholic==1),]$prop,breaks=seq(0,0.2,by=0.004),xlim=c(0,0.2),cex.lab=1.5,cex.axis=1.5,cex.main=1.5,main = "Histogram of propensity scores for catholic school students",xlab="Estimated Propensity Score")
 hist(cath[which(cath$catholic==0),]$prop,breaks=seq(0,0.2,by=0.004),xlim=c(0,0.2),cex.lab=1.5,cex.axis=1.5,cex.main=1.5,main = "Histogram of propensity scores for public school students",xlab="Estimated Propensity Score")
-hist(cath[which(cath$catholic==1),]$eotm,breaks = seq(0,50,by=1),xlim=c(0,50),cex.lab=1.5,cex.axis=1.5,cex.main=1.5,main = "Histogram of IPTW weights for catholic school students",xlab="Estimated IPTW Weights")
+hist(cath[which(cath$catholic==1),]$eotm,breaks = seq(0,95,by=1),xlim=c(0,95),cex.lab=1.5,cex.axis=1.5,cex.main=1.5,main = "Histogram of IPTW weights for catholic school students",xlab="Estimated IPTW Weights")
 hist(cath[which(cath$catholic==0),]$eotm,breaks = seq(1,1.25,by=0.005),xlim=c(1,1.25),cex.lab=1.5,cex.axis=1.5,cex.main=1.5,main = "Histogram of IPTW weights for public school students",xlab="Estimated IPTW Weights")
 par(mfrow=c(1,1))
 
-summary(lm(math12~catholic+faminc8*math8,data=cath))
-summary(lm(math12~catholic+faminc8*math8,weights = eotm,data=cath))
-summary(lm(math12~catholic+faminc8*math8,weights = teotm,data=cath))
+summary(lm(math12~catholic+faminc8*math8,data=cath)) ## 1.677
+summary(glm(catholic~faminc8*math8,family=binomial,data=cath))
+summary(lm(math12~catholic+faminc8*math8,weights = eotm,data=cath)) ## 1.60
+summary(lm(math12~catholic+faminc8*math8,weights = teotm,data=cath)) ## 1.65
 
 set.seed(12345)
 library(boot)
@@ -31,90 +34,79 @@ hh=function(d,i){
   return(coef(mod)[2])
 }
 
-hhest=boot(cath,hh,1000,strata=cath$catholic,weights=cath$p,parallel="snow",ncpus=8)
-c(mean(hhest$t),sd(hhest$t)) ## Mean is 1.67, SD is 0.24
+hhest=boot(cath,hh,1000,strata=cath$catholic,weights=cath$p,parallel="multicore",ncpus=8)
+c(mean(hhest$t),sd(hhest$t)) ## Mean is 1.67, SD is 0.246
+quantile(hhest$t,probs = c(0.025,0.975))
 
 ## Bootstrap IPTW
 iptw=function(d,i){
-  mod=lm(math12~catholic+faminc8*math8,data=d[i,],weights=d[i,]$eotm)
+  dat=d[i,]
+  dat=within(dat,{
+    p=fitted.values(glm(catholic~math8*faminc8,family=binomial))
+    eotm=ifelse(catholic==1,1/p,1/(1-p))
+  })
+  mod=lm(math12~catholic+faminc8*math8,data=dat,weights=dat$eotm)
   return(coef(mod)[2])
 }
 
-biptw=boot(cath,iptw,1000,strata=cath$catholic,parallel="snow",ncpus=8)
-c(mean(biptw$t),sd(biptw$t)) ## Mean is 1.61, SD is 0.25
+biptw=boot(cath,iptw,1000,strata=cath$catholic,parallel="multicore",ncpus=8)
+c(mean(biptw$t),sd(biptw$t)) ## Mean is 1.59, SD is 0.248
+quantile(biptw$t,probs = c(0.025,0.975))
 
 ## Bootstrap IPTW with trimmed weights
 iptwt=function(d,i){
-  mod=lm(math12~catholic+faminc8*math8,data=d[i,],weights=d[i,]$teotm)
+  dat=d[i,]
+  dat=within(dat,{
+    p=fitted.values(glm(catholic~math8*faminc8,family=binomial))
+    eotm=ifelse(catholic==1,1/p,1/(1-p))
+    teotm=ifelse(eotm<=20,eotm,20)
+  })
+  mod=lm(math12~catholic+faminc8*math8,data=dat,weights=dat$teotm)
   return(coef(mod)[2])
 }
 
-biptwt=boot(cath,iptwt,1000,strata=cath$catholic,parallel="snow",ncpus=8)
-c(mean(biptwt$t),sd(biptwt$t)) ## Mean is 1.67, SD is 0.25
+biptwt=boot(cath,iptwt,1000,strata=cath$catholic,parallel="multicore",ncpus=8)
+c(mean(biptwt$t),sd(biptwt$t)) ## Mean is 1.65, SD is 0.247
+quantile(biptwt$t,probs = c(0.025,0.975))
 
+## Bootstrap IPTW with stabilized weights
+iptws=function(d,i){
+  dat=d[i,]
+  dat=within(dat,{
+    p=fitted.values(glm(catholic~math8*faminc8,family=binomial))
+    ps=ifelse(catholic==1,sum(catholic)/length(catholic),1-sum(catholic)/length(catholic))
+    eotm=ifelse(catholic==1,1/p,1/(1-p))
+    seotm=ps*eotm
+  })
+  mod=lm(math12~catholic+faminc8*math8,data=dat,weights=dat$seotm)
+  return(coef(mod)[2])
+}
+
+biptws=boot(cath,iptws,1000,strata=cath$catholic,parallel="multicore",ncpus=8)
+c(mean(biptws$t),sd(biptws$t)) ## Mean is 1.60, SD is 0.252
+quantile(biptws$t,probs = c(0.025,0.975))
+
+library(PSweight)
+pform <- catholic~math8*faminc8
+oform <- math12~math8*faminc8
+sand <- PSweight(ps.formula = pform,yname = "math12",zname="catholic",data = cath,augmentation = TRUE,out.formula = oform,family = 'gaussian',weight ='IPW')
+mod <- summary(sand)
+mod$estimates ## Estimate is 1.60, SD is 0.246
+
+## Make a figure to compare different bootstrap estimates
 plot(density(hhest$t))
 lines(density(biptw$t),col='red')
 lines(density(biptwt$t),col='blue')
-legend('topright',legend=c('H-H EST','BIPTW EST','BIPTW Trimmed'),lty=1,col=c('black','red','blue'))
-
-## I create a function for bootstrapping IPTW estimator
-
-bootiptw=function(iter,data){
-  out <- numeric(iter)
-  tdata <- data[data$catholic==1,]
-  cdata <- data[data$catholic==0,]
-  for(i in 1:iter){
-    data1=tdata[sample(nrow(tdata),replace=TRUE),]
-    data0=cdata[sample(nrow(cdata),replace=TRUE),]
-    newdata=as.data.frame(rbind(data1,data0))
-    iptw=lm(math12~catholic+math8*faminc8,weights=newdata$eotm,data=newdata)
-    out[i] <- coef(iptw)[2]
-  }
-  return(c(mean(out),sd(out)))
-}
-
-bootiptw <- compiler::cmpfun(bootiptw)
-
-bootiptw(1000,cath) ## 1.62 with se = 0.25
-
-bootiptwt=function(iter,data){
-  out <- numeric(iter)
-  tdata <- data[data$catholic==1,]
-  cdata <- data[data$catholic==0,]
-  for(i in 1:iter){
-    data1=tdata[sample(nrow(tdata),replace=TRUE),]
-    data0=cdata[sample(nrow(cdata),replace=TRUE),]
-    newdata=as.data.frame(rbind(data1,data0))
-    iptw=lm(math12~catholic+math8*faminc8,weights=newdata$teotm,data=newdata)
-    out[i] <- coef(iptw)[2]
-  }
-  return(c(mean(out),sd(out)))
-}
-
-bootiptwt <- compiler::cmpfun(bootiptwt)
-
-bootiptwt(1000,cath) ## 1.68 with se = 0.25
+lines(density(biptws$t),col='green')
+legend('topright',legend=c('GBoot','Boot','TBoot','SBoot'),lty=1,col=c('black','red','blue','green'),cex=0.8)
 
 
-## I also create a function for Hansen-Hurwitz estimator 
-hhreg=function(iter,data){
-  out <- numeric(iter)
-  d1 <- data[data$catholic==1,]
-  d0 <- data[data$catholic==0,]
-  t1=rmultinom(iter,nrow(d1),prob=d1$p)
-  t0=rmultinom(iter,nrow(d0),prob=d0$p)
-  for(i in 1:iter){
-    dt=d1[rep(1:nrow(d1),times=t1[,i]),]
-    dc=d0[rep(1:nrow(d0),times=t0[,i]),]
-    d=as.data.frame(rbind(dt,dc))
-    mod=lm(math12~catholic+math8*faminc8,data=d,weights=d$hajek)
-    out[i]=coef(mod)[2]
-  }
-  return(c(mean(out),sd(out)))
-}
-
-hhreg <- compiler::cmpfun(hhreg)
-
-hhreg(1000,cath) ## 1.68 with se = 0.24
-
+## Covariate Balance
+## Use the cobalt package
+library(cobalt)
+x <- cbind(cath$faminc8,cath$math8)
+col_w_smd(x,treat = cath$catholic)
+col_w_smd(x,treat = cath$catholic,weights = cath$eotm) ## Only need to report this one
+col_w_smd(x,treat = cath$catholic,weights = cath$teotm)
+col_w_smd(x,treat = cath$catholic,weights = cath$seotm)
 
